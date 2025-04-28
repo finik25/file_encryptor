@@ -65,7 +65,7 @@ def encrypt_file(input_path: str, password: str) -> bool:
         project_root = get_project_root()
         file_path = resolve_input_path(input_path, "test_data")
 
-        print(f"🔍 Найден файл: {os.path.relpath(file_path, project_root)}")
+        print(f"[SEARCH] Найден файл: {os.path.relpath(file_path, project_root)}")
 
         # Шифрование
         data = read_file(file_path)
@@ -79,12 +79,12 @@ def encrypt_file(input_path: str, password: str) -> bool:
         output_path = os.path.join(encrypted_dir, output_filename)
         write_file(output_path, encrypted)
 
-        print(f"✅ Успешно зашифрован: {os.path.relpath(output_path, project_root)}")
-        print(f"📁 Полный путь: {output_path}")
+        print(f"[OK] Успешно зашифрован: {os.path.relpath(output_path, project_root)}")
+        print(f"[PATH] Полный путь: {output_path}")
         return True
 
     except Exception as e:
-        print(f"❌ Ошибка: {str(e)}")
+        print(f"[ERROR] Ошибка: {str(e)}")
         return False
 
 
@@ -94,7 +94,7 @@ def decrypt_file(input_path: str, password: str) -> bool:
         project_root = get_project_root()
         file_path = resolve_input_path(input_path, "encrypted")
 
-        print(f"🔍 Найден файл: {os.path.relpath(file_path, project_root)}")
+        print(f"[SEARCH] Найден файл: {os.path.relpath(file_path, project_root)}")
 
         # Дешифрование
         data = read_file(file_path)
@@ -110,18 +110,18 @@ def decrypt_file(input_path: str, password: str) -> bool:
         output_path = os.path.join(decrypted_dir, output_filename)
         write_file(output_path, decrypted)
 
-        print(f"✅ Успешно расшифрован: {os.path.relpath(output_path, project_root)}")
-        print(f"📁 Полный путь: {output_path}")
+        print(f"[OK] Успешно расшифрован: {os.path.relpath(output_path, project_root)}")
+        print(f"[PATH] Полный путь: {output_path}")
         return True
 
     except Exception as e:
-        print(f"❌ Ошибка: {str(e)}")
+        print(f"[ERROR] Ошибка: {str(e)}")
         return False
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="🔒 Утилита для шифрования файлов (Windows/Linux)",
+        description="Утилита для шифрования файлов (Windows/Linux)",
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument(

@@ -21,9 +21,9 @@ def remove_test_files(silent=False):
                         removed_files.append(file_path)
                 except Exception as e:
                     if not silent:
-                        print(f"⚠️ Не удалось удалить {filename}: {e}")
+                        print(f"[WARN] Не удалось удалить {filename}: {e}")
 
     if not silent and removed_files:
-        print("\n🧹 Очистка тестовых файлов:")
+        print("\n[CLEANUP] Очистка тестовых файлов:")
         for file in removed_files:
             print(f"  Удалён: {os.path.relpath(file, base_dir)}")

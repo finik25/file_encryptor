@@ -23,7 +23,7 @@ class TestFileEncryption(unittest.TestCase):
         key, iv = generate_key(password)
         test_results = {}
 
-        print("\n🔍 Тестирование файлов:")
+        print("\n[SEARCH] Тестирование файлов:")
         for filename in os.listdir(self.test_data_dir):
             file_path = os.path.join(self.test_data_dir, filename)
             if not os.path.isfile(file_path):
@@ -46,21 +46,21 @@ class TestFileEncryption(unittest.TestCase):
 
                     # Проверка
                     is_success = original_data == decrypted_data
-                    test_results[filename] = "✅ УСПЕХ" if is_success else "❌ ОШИБКА"
+                    test_results[filename] = "[OK] УСПЕХ" if is_success else "[ERROR] ОШИБКА"
                     self.assertTrue(is_success)
 
                     # Вывод информации
-                    print(f"\n📄 Файл: {filename}")
+                    print(f"\n[FILE] Файл: {filename}")
                     print(f"   Оригинал: {os.path.relpath(file_path, self.base_dir)}")
                     print(f"   Зашифрован: {os.path.relpath(encrypted_path, self.base_dir)}")
                     print(f"   Расшифрован: {os.path.relpath(decrypted_path, self.base_dir)}")
 
                 except Exception as e:
-                    test_results[filename] = f"❌ ОШИБКА: {str(e)}"
+                    test_results[filename] = f"[ERROR] ОШИБКА: {str(e)}"
                     raise
 
         # Вывод результатов
-        print("\n📊 Результаты:")
+        print("\n[RESULTS] Результаты:")
         for filename, result in test_results.items():
             print(f"  {filename}: {result}")
 
