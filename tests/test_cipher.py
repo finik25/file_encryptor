@@ -18,7 +18,6 @@ class TestFileEncryption(unittest.TestCase):
         os.makedirs(cls.decrypted_dir, exist_ok=True)
 
     def test_all_files(self):
-        """Тестирование без лишних сообщений о сохранении"""
         password = "test_password"
         key, iv = generate_key(password)
         test_results = {}
@@ -64,7 +63,7 @@ class TestFileEncryption(unittest.TestCase):
         for filename, result in test_results.items():
             print(f"  {filename}: {result}")
 
-        # Очистка (в конце)
+        # Очистка
         remove_test_files()
 
 

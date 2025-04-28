@@ -5,7 +5,6 @@ from typing import Tuple
 
 def custom_hash(data: bytes, output_len: int = 32) -> bytes:
     """
-    Самописная хеш-функция с хорошим лавинным эффектом
     Args:
         data: входные данные
         output_len: длина вывода (по умолчанию 32 байта)
@@ -54,7 +53,7 @@ def custom_hash(data: bytes, output_len: int = 32) -> bytes:
 
 def generate_key(password: str, salt: bytes = None, iterations: int = 500) -> Tuple[bytes, bytes]:
     """
-    Генерация ключа с самописной хеш-функцией
+    Генерация ключа
     Args:
         password: парольная фраза
         salt: соль (16 байт), если None - генерируется из пароля

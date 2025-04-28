@@ -1,9 +1,7 @@
 import os
-import shutil
 
 
 def remove_test_files(silent=False):
-    """Удаляет тестовые файлы с возможностью тихого режима"""
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     test_dirs = [
         os.path.join(base_dir, "tests", "encrypted"),

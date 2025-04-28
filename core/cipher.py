@@ -1,11 +1,11 @@
 import os
-
+import json
+from typing import Tuple, Dict
 
 def pad_data(data: bytes, block_size: int = 8) -> bytes:
     """Добавление PKCS7 padding"""
     pad_len = block_size - (len(data) % block_size)
     return data + bytes([pad_len] * pad_len)
-
 
 def unpad_data(data: bytes) -> bytes:
     """Удаление PKCS7 padding"""
@@ -13,7 +13,6 @@ def unpad_data(data: bytes) -> bytes:
     if pad_len > len(data):
         raise ValueError("Invalid padding")
     return data[:-pad_len]
-
 
 def generate_sbox(key_part: bytes) -> list:
     """Генерация S-box 8x8 (256 элементов)"""
@@ -27,7 +26,6 @@ def generate_sbox(key_part: bytes) -> list:
 
     return sbox
 
-
 def generate_pbox(key_part: bytes) -> list:
     """Генерация P-box (перестановка 64 бит)"""
     pbox = list(range(64))
@@ -40,55 +38,39 @@ def generate_pbox(key_part: bytes) -> list:
 
     return pbox
 
-
 def apply_pbox(block: bytes, pbox: list) -> bytes:
     """Применение перестановки битов"""
     bits = ''.join(f'{byte:08b}' for byte in block)
     permuted = ''.join(bits[i] for i in pbox)
     return bytes(int(permuted[i:i + 8], 2) for i in range(0, 64, 8))
 
-
 def apply_sbox(block: bytes, sbox: list) -> bytes:
     """Применение таблицы замен"""
     return bytes(sbox[byte] for byte in block)
 
-
 def encrypt_block(block: bytes, sboxes: list, pboxes: list) -> bytes:
     """Шифрование одного блока (8 байт)"""
-    # Первый раунд
     block = apply_pbox(block, pboxes[0])
     block = apply_sbox(block, sboxes[0])
-
-    # Второй раунд
     block = apply_pbox(block, pboxes[1])
     block = apply_sbox(block, sboxes[1])
-
     return block
-
 
 def decrypt_block(block: bytes, sboxes: list, pboxes: list) -> bytes:
     """Дешифрование одного блока (8 байт)"""
-    # Обратные S-box
     inv_sboxes = [
         [sboxes[0].index(i) for i in range(256)],
         [sboxes[1].index(i) for i in range(256)]
     ]
-
-    # Обратные P-box
     inv_pboxes = [
         [pboxes[0].index(i) for i in range(64)],
         [pboxes[1].index(i) for i in range(64)]
     ]
-
-    # Раунды в обратном порядке
     block = apply_sbox(block, inv_sboxes[1])
     block = apply_pbox(block, inv_pboxes[1])
-
     block = apply_sbox(block, inv_sboxes[0])
     block = apply_pbox(block, inv_pboxes[0])
-
     return block
-
 
 def encrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
     """Шифрование данных с CBC режимом"""
@@ -127,3 +109,38 @@ def decrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
         prev_block = block
 
     return unpad_data(bytes(decrypted))
+
+
+def pack_metadata(filepath: str, hide_name: bool = False) -> bytes:
+    if hide_name:
+        # Сохраняем только расширение
+        file_ext = os.path.splitext(filepath)[1]
+        metadata = {
+            'original_ext': file_ext,
+            'file_size': os.path.getsize(filepath),
+            'timestamp': int(os.path.getmtime(filepath))
+        }
+    else:
+        # Сохраняем полное имя
+        metadata = {
+            'original_name': os.path.basename(filepath),
+            'file_size': os.path.getsize(filepath),
+            'timestamp': int(os.path.getmtime(filepath))
+        }
+    return json.dumps(metadata).encode('utf-8')
+
+def encrypt_with_metadata(data: bytes, filepath: str, key: bytes, iv: bytes, hide_name: bool = False) -> bytes:
+    """Шифрование данных с метаданными"""
+    metadata = pack_metadata(filepath, hide_name)
+    encrypted_meta = encrypt(metadata, key, iv)
+    encrypted_data = encrypt(data, key, iv)
+    meta_len = len(encrypted_meta).to_bytes(4, 'big')
+    return meta_len + encrypted_meta + encrypted_data
+
+def decrypt_with_metadata(encrypted_data: bytes, key: bytes, iv: bytes) -> Tuple[Dict, bytes]:
+    """Дешифровка файла с метаданными"""
+    meta_len = int.from_bytes(encrypted_data[:4], 'big')
+    encrypted_meta = encrypted_data[4:4+meta_len]
+    metadata = json.loads(decrypt(encrypted_meta, key, iv).decode('utf-8'))
+    data = decrypt(encrypted_data[4+meta_len:], key, iv)
+    return metadata, data
