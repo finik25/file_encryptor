@@ -109,17 +109,21 @@ def decrypt_file(input_path: str, password: str) -> bool:
 
         data = read_file(file_path)
         key, iv = generate_key(password)
+
+        # Добавляем прогресс-бар для больших файлов
+        if os.path.getsize(file_path) > 1024 * 1024:  # Для файлов >1MB
+            print("[INFO] Идет дешифрование...")
+
         metadata, decrypted = decrypt_with_metadata(data, key, iv)
 
+        # Сохранение файла
         decrypted_dir = os.path.join(project_root, "decrypted")
         os.makedirs(decrypted_dir, exist_ok=True)
 
-        if 'original_name' in metadata:
-            # Если имя не скрыто
-            output_filename = metadata['original_name']
-        else:
-            # Если имя скрыто, используем "decrypted" + оригинальное расширение
+        if metadata.get('original_name', '') == 'hidden':
             output_filename = "decrypted" + metadata.get('original_ext', '')
+        else:
+            output_filename = metadata.get('original_name', 'decrypted_data')
 
         output_path = os.path.join(decrypted_dir, output_filename)
         write_file(output_path, decrypted)
