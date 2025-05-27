@@ -104,11 +104,11 @@ class TestFileEncryption(unittest.TestCase):
 
         # Общая скорость
         total_time = keygen_time + encrypt_time + decrypt_time
-        total_speed = len(data) * 2 / total_time / 1024  # в KB/s
-        print(f"[SPEED] Общая скорость: {total_speed:.2f} KB/s")
+        total_speed = len(data) * 2 / total_time / 1024 / 128 # в MBit/s
+        print(f"[SPEED] Общая скорость: {total_speed:.2f} MBit/s")
 
-        # Проверка требования (>250 KB/s)
-        self.assertGreater(total_speed, 250,
+        # Проверка требования (>2 MBit/s)
+        self.assertGreater(total_speed, 2,
                            f"Скорость {total_speed:.2f} KB/s ниже требуемых 250 KB/s (2 Mbit/s)")
 
         # Проверка целостности

@@ -4,11 +4,25 @@ import time
 import numpy as np
 from typing import Tuple, Dict
 from functools import lru_cache
+from tqdm import tqdm
+from core.logger import logger
 
 # Глобальные переменные для профилирования
 encrypt_timings = {}
 decrypt_timings = {}
 
+class InvalidPasswordError(Exception):
+    """Специальное исключение для неверного пароля"""
+    pass
+
+class CorruptedDataError(Exception):
+    """Исключение для повреждённых данных"""
+    pass
+
+def calculate_checksum(data: bytes) -> str:
+    """Самописная замена hashlib.sha256"""
+    from .keygen import custom_hash  # Импортируем наш хеш
+    return custom_hash(data, 32).hex()[:64]  # Возвращаем hex-представление
 
 def timed(f):
     """Декоратор для замера времени выполнения функций"""
@@ -112,100 +126,152 @@ def decrypt_block_ultra(block: bytes, inv_sboxes: list, inv_pboxes: list) -> byt
 
 @timed
 def encrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
-    """Оптимизированное шифрование с предварительными вычислениями"""
-    # Кешируем преобразования
-    sboxes = [
-        np.array(get_sbox_cached(key[:16]), dtype=np.uint8),
-        np.array(get_sbox_cached(key[16:]), dtype=np.uint8)
-    ]
-    pboxes = [
-        get_pbox_cached(key[:8]),
-        get_pbox_cached(key[8:16])
-    ]
+    """Оптимизированное шифрование CBC с прогресс-баром tqdm"""
+    is_metadata = len(data) < 100  # Определяем, что это метаданные
+    LARGE_FILE_THRESHOLD = 2 * 1024 * 1024  # 2MB
 
-    # Подготовка данных
-    data_padded = pad_data(data)
-    encrypted = bytearray()
+    try:
+        # Инициализация S-box и P-box
+        sboxes = [
+            np.array(get_sbox_cached(key[:16]), dtype=np.uint8),
+            np.array(get_sbox_cached(key[16:]), dtype=np.uint8)
+        ]
+        pboxes = [
+            get_pbox_cached(key[:8]),
+            get_pbox_cached(key[8:16])
+        ]
 
-    # Обеспечиваем правильный размер IV (8 байт)
-    prev_block = np.frombuffer(iv.ljust(8, b'\x00')[:8], dtype=np.uint8)
+        # Подготовка данных
+        original_size = len(data)
+        padded_data = pad_data(data)
+        encrypted = bytearray()
+        prev_block = np.frombuffer(iv.ljust(8, b'\x00')[:8], dtype=np.uint8).copy()
 
-    # Обрабатываем блоки без использования memoryview
-    for i in range(0, len(data_padded), 8):
-        block = data_padded[i:i + 8]
+        # Настройка прогресс-бара для больших файлов
+        show_progress = not is_metadata and original_size > LARGE_FILE_THRESHOLD
+        progress_bar = None
 
-        # Дополняем блок до 8 байт и преобразуем в numpy array
-        block_padded = block.ljust(8, b'\x00')[:8]
-        block_arr = np.frombuffer(block_padded, dtype=np.uint8)
+        if show_progress:
+            progress_bar = tqdm(
+                total=len(padded_data),
+                unit='B',
+                unit_scale=True,
+                unit_divisor=1024,
+                desc="Шифрование",
+                ncols=75  # Фиксированная ширина для лучшего отображения
+            )
 
-        # CBC через numpy с проверкой размеров
-        if block_arr.shape != prev_block.shape:
-            block_arr = np.resize(block_arr, prev_block.shape)
-        block_arr = np.bitwise_xor(block_arr, prev_block)
+        # Обработка блоков
+        for i in range(0, len(padded_data), 8):
+            block = padded_data[i:i + 8]
+            block_arr = np.frombuffer(block, dtype=np.uint8).copy()
 
-        # Шифрование блока
-        encrypted_block = encrypt_block_ultra(block_arr.tobytes(), sboxes, pboxes)
-        encrypted.extend(encrypted_block)
-        prev_block = np.frombuffer(encrypted_block, dtype=np.uint8)
+            # CBC XOR
+            block_arr ^= prev_block
 
-    return bytes(encrypted)
+            # Шифрование блока
+            encrypted_block = encrypt_block_ultra(block_arr.tobytes(), sboxes, pboxes)
+            encrypted.extend(encrypted_block)
+            prev_block = np.frombuffer(encrypted_block, dtype=np.uint8).copy()
+
+            # Обновление прогресс-бара
+            if progress_bar:
+                progress_bar.update(len(block))
+
+        # Закрытие прогресс-бара
+        if progress_bar:
+            progress_bar.close()
+
+        # Логирование результатов
+        if is_metadata:
+            logger.log(f"Шифрование метаданных завершено. Размер: {len(encrypted)} байт",
+                       is_debug=True)
+        else:
+            logger.log(f"Шифрование файла завершено. Итоговый размер: {len(encrypted)} байт")
+
+        return bytes(encrypted)
+
+    except Exception as e:
+        # Гарантируем закрытие прогресс-бара при ошибке
+        if progress_bar:
+            progress_bar.close()
+        error_msg = f"Ошибка шифрования {'метаданных' if is_metadata else 'файла'}: {str(e)}"
+        logger.error(error_msg)
+        raise
 
 
 @timed
 def decrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
-    """Оптимизированное дешифрование с кешированием"""
-    # Подготовка преобразований
-    sboxes = [
-        np.array(get_sbox_cached(key[:16]), dtype=np.uint8),
-        np.array(get_sbox_cached(key[16:]), dtype=np.uint8)
-    ]
-    pboxes = [
-        get_pbox_cached(key[:8]),
-        get_pbox_cached(key[8:16])
-    ]
-
-    # Кешируем обратные преобразования
-    cache_key = (id(sboxes[0]), id(sboxes[1]), id(pboxes[0]), id(pboxes[1]))
-    if not hasattr(decrypt, 'cache'):
-        decrypt.cache = {}
-
-    if cache_key not in decrypt.cache:
-        inv_sboxes = [
-            np.array([sboxes[0].tolist().index(i) for i in range(256)], dtype=np.uint8),
-            np.array([sboxes[1].tolist().index(i) for i in range(256)], dtype=np.uint8)
+    """Оптимизированное дешифрование с кешированием и проверкой пароля"""
+    try:
+        # Подготовка преобразований
+        sboxes = [
+            np.array(get_sbox_cached(key[:16]), dtype=np.uint8),
+            np.array(get_sbox_cached(key[16:]), dtype=np.uint8)
         ]
-        inv_pboxes = [
-            np.array([pboxes[0].tolist().index(i) for i in range(64)], dtype=np.uint8),
-            np.array([pboxes[1].tolist().index(i) for i in range(64)], dtype=np.uint8)
+        pboxes = [
+            get_pbox_cached(key[:8]),
+            get_pbox_cached(key[8:16])
         ]
-        decrypt.cache[cache_key] = (inv_sboxes, inv_pboxes)
 
-    inv_sboxes, inv_pboxes = decrypt.cache[cache_key]
-    decrypted = bytearray()
+        # Кешируем обратные преобразования
+        cache_key = (id(sboxes[0]), id(sboxes[1]), id(pboxes[0]), id(pboxes[1]))
+        if not hasattr(decrypt, 'cache'):
+            decrypt.cache = {}
 
-    # Обеспечиваем правильный размер IV (8 байт)
-    prev_block = np.frombuffer(iv.ljust(8, b'\x00')[:8], dtype=np.uint8)
+        if cache_key not in decrypt.cache:
+            try:
+                inv_sboxes = [
+                    np.array([sboxes[0].tolist().index(i) for i in range(256)], dtype=np.uint8),
+                    np.array([sboxes[1].tolist().index(i) for i in range(256)], dtype=np.uint8)
+                ]
+                inv_pboxes = [
+                    np.array([pboxes[0].tolist().index(i) for i in range(64)], dtype=np.uint8),
+                    np.array([pboxes[1].tolist().index(i) for i in range(64)], dtype=np.uint8)
+                ]
+                decrypt.cache[cache_key] = (inv_sboxes, inv_pboxes)
+            except ValueError as e:
+                raise InvalidPasswordError("Неверный пароль: невозможно восстановить S-box") from e
 
-    # Обрабатываем блоки без использования memoryview
-    for i in range(0, len(data), 8):
-        block = data[i:i + 8]
+        inv_sboxes, inv_pboxes = decrypt.cache[cache_key]
+        decrypted = bytearray()
 
-        # Дешифрование блока
-        decrypted_block = decrypt_block_ultra(block, inv_sboxes, inv_pboxes)
+        # Обеспечиваем правильный размер IV (8 байт)
+        prev_block = np.frombuffer(iv.ljust(8, b'\x00')[:8], dtype=np.uint8)
 
-        # Дополняем блок до 8 байт и преобразуем в numpy array
-        decrypted_block_padded = decrypted_block.ljust(8, b'\x00')[:8]
-        decrypted_block_arr = np.frombuffer(decrypted_block_padded, dtype=np.uint8)
+        # Обрабатываем блоки
+        for i in range(0, len(data), 8):
+            block = data[i:i + 8]
 
-        # CBC через numpy с проверкой размеров
-        if decrypted_block_arr.shape != prev_block.shape:
-            decrypted_block_arr = np.resize(decrypted_block_arr, prev_block.shape)
-        decrypted_block_arr = np.bitwise_xor(decrypted_block_arr, prev_block)
+            try:
+                decrypted_block = decrypt_block_ultra(block, inv_sboxes, inv_pboxes)
+            except Exception as e:
+                raise CorruptedDataError("Ошибка дешифрования блока: возможно повреждение данных") from e
 
-        decrypted.extend(decrypted_block_arr.tobytes())
-        prev_block = np.frombuffer(block.ljust(8, b'\x00')[:8], dtype=np.uint8)
+            # Дополняем блок до 8 байт
+            decrypted_block_padded = decrypted_block.ljust(8, b'\x00')[:8]
+            decrypted_block_arr = np.frombuffer(decrypted_block_padded, dtype=np.uint8)
 
-    return unpad_data(bytes(decrypted))
+            # CBC через numpy
+            if decrypted_block_arr.shape != prev_block.shape:
+                decrypted_block_arr = np.resize(decrypted_block_arr, prev_block.shape)
+            decrypted_block_arr = np.bitwise_xor(decrypted_block_arr, prev_block)
+
+            decrypted.extend(decrypted_block_arr.tobytes())
+            prev_block = np.frombuffer(block.ljust(8, b'\x00')[:8], dtype=np.uint8)
+
+        # Проверка padding
+        try:
+            return unpad_data(bytes(decrypted))
+        except (ValueError, IndexError) as e:
+            if "Invalid padding" in str(e):
+                raise InvalidPasswordError("Неверный пароль или повреждённые данные") from e
+            raise CorruptedDataError("Ошибка удаления padding: возможно повреждение данных") from e
+
+    except Exception as e:
+        if not isinstance(e, (InvalidPasswordError, CorruptedDataError)):
+            raise CorruptedDataError(f"Ошибка дешифрования: {str(e)}") from e
+        raise
 
 
 def print_timings():
@@ -242,19 +308,56 @@ def pack_metadata(filepath: str, hide_name: bool = False) -> bytes:
 
 
 @timed
-def encrypt_with_metadata(data: bytes, filepath: str, key: bytes, iv: bytes, hide_name: bool = False) -> bytes:
-    """Шифрование с метаданными"""
-    metadata = pack_metadata(filepath, hide_name)
-    encrypted_meta = encrypt(metadata, key, iv)
-    encrypted_data = encrypt(data, key, iv)
-    return len(encrypted_meta).to_bytes(4, 'big') + encrypted_meta + encrypted_data
+def encrypt_with_metadata(data: bytes, filepath: str, key: bytes, iv: bytes,
+                          hide_name: bool = False) -> bytes:
+    """Шифрование с метаданными и интегрированным tqdm"""
+    logger.log("Начато шифрование файла с метаданными", is_debug=True)
+
+    try:
+        # Шифруем метаданные (без прогресс-бара)
+        metadata = pack_metadata(filepath, hide_name)
+        encrypted_meta = encrypt(metadata, key, iv)
+
+        # Шифруем основные данные (с прогресс-баром)
+        encrypted_data = encrypt(data, key, iv)
+
+        # Формируем итоговый результат
+        result = len(encrypted_meta).to_bytes(4, 'big') + encrypted_meta + encrypted_data
+        logger.log("Шифрование с метаданными успешно завершено", is_debug=True)
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Ошибка при шифровании с метаданными: {str(e)}")
+        raise
 
 
 @timed
 def decrypt_with_metadata(encrypted_data: bytes, key: bytes, iv: bytes) -> Tuple[Dict, bytes]:
-    """Дешифрование с метаданными"""
-    meta_len = int.from_bytes(encrypted_data[:4], 'big')
-    encrypted_meta = encrypted_data[4:4 + meta_len]
-    metadata = json.loads(decrypt(encrypted_meta, key, iv).decode('utf-8'))
-    data = decrypt(encrypted_data[4 + meta_len:], key, iv)
-    return metadata, data
+    """Дешифрование с метаданными и улучшенной обработкой ошибок"""
+    if len(encrypted_data) < 4:
+        raise CorruptedDataError("Файл слишком короткий для содержания метаданных")
+
+    try:
+        meta_len = int.from_bytes(encrypted_data[:4], 'big')
+        if meta_len <= 0 or meta_len > len(encrypted_data) - 4:
+            raise CorruptedDataError("Некорректная длина метаданных")
+
+        encrypted_meta = encrypted_data[4:4 + meta_len]
+        metadata = json.loads(decrypt(encrypted_meta, key, iv).decode('utf-8'))
+
+        if not isinstance(metadata, dict):
+            raise CorruptedDataError("Некорректный формат метаданных")
+
+        data = decrypt(encrypted_data[4 + meta_len:], key, iv)
+
+        # Проверка соответствия размера
+        if 'file_size' in metadata and len(data) != metadata['file_size']:
+            raise CorruptedDataError("Размер данных не соответствует метаданным")
+
+        return metadata, data
+
+    except json.JSONDecodeError as e:
+        raise InvalidPasswordError("Неверный пароль: невозможно расшифровать метаданные") from e
+    except UnicodeDecodeError as e:
+        raise InvalidPasswordError("Неверный пароль: повреждены метаданные") from e

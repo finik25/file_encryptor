@@ -1,10 +1,10 @@
 import argparse
 import os
 import re
-from core.cipher import encrypt_with_metadata, decrypt_with_metadata
+from core.cipher import encrypt_with_metadata, decrypt_with_metadata, CorruptedDataError, InvalidPasswordError, calculate_checksum
 from core.keygen import generate_key
 from core.file_io import read_file, write_file
-
+from core.logger import logger
 
 def get_project_root():
     """Возвращает абсолютный путь к корневой директории проекта"""
@@ -101,41 +101,82 @@ def encrypt_file(input_path: str, password: str, output_name: str = None, hide_n
         return False
 
 
-def decrypt_file(input_path: str, password: str) -> bool:
+def decrypt_file(input_path: str, password: str, verbose: bool = False) -> bool:
+    """Дешифрование файла с улучшенной обработкой ошибок"""
     try:
         project_root = get_project_root()
         file_path = resolve_input_path(input_path, "encrypted")
+
+        if verbose:
+            print(f"[DEBUG] Поиск файла по пути: {input_path}")
+
         print(f"[SEARCH] Найден файл: {os.path.relpath(file_path, project_root)}")
 
         data = read_file(file_path)
+
+        if verbose:
+            print("[DEBUG] Генерация ключа...")
         key, iv = generate_key(password)
 
-        # Добавляем прогресс-бар для больших файлов
-        if os.path.getsize(file_path) > 1024 * 1024:  # Для файлов >1MB
-            print("[INFO] Идет дешифрование...")
+        # Прогресс-бар для больших файлов
+        file_size = os.path.getsize(file_path)
+        if file_size > 1024 * 1024:  # >1MB
+            print(f"[INFO] Идёт дешифрование ({file_size / 1024 / 1024:.2f} MB)...")
 
+        if verbose:
+            print("[DEBUG] Дешифрование метаданных...")
         metadata, decrypted = decrypt_with_metadata(data, key, iv)
 
         # Сохранение файла
         decrypted_dir = os.path.join(project_root, "decrypted")
         os.makedirs(decrypted_dir, exist_ok=True)
 
-        if metadata.get('original_name', '') == 'hidden':
-            output_filename = "decrypted" + metadata.get('original_ext', '')
-        else:
-            output_filename = metadata.get('original_name', 'decrypted_data')
-
+        output_filename = (
+            "decrypted" + metadata.get('original_ext', '')
+            if metadata.get('original_name', '') == 'hidden'
+            else metadata.get('original_name', 'decrypted_data')
+        )
         output_path = os.path.join(decrypted_dir, output_filename)
+
+        if verbose:
+            print(f"[DEBUG] Сохранение в: {output_path}")
         write_file(output_path, decrypted)
 
         print(f"[OK] Успешно расшифрован: {os.path.relpath(output_path, project_root)}")
-        if 'original_name' in metadata:
-            print(f"[INFO] Оригинальное имя: {metadata['original_name']}")
         print(f"[INFO] Размер файла: {metadata['file_size']} байт")
-        print(f"[PATH] Полный путь: {output_path}")
+        if 'original_name' in metadata and metadata['original_name'] != 'hidden':
+            print(f"[INFO] Оригинальное имя: {metadata['original_name']}")
+        if verbose:
+            print(f"[DEBUG] Контрольная сумма: {calculate_checksum(decrypted)}")
+
         return True
+
+    except InvalidPasswordError as e:
+        print(f"\n[ОШИБКА] {str(e)}")
+
+        if verbose:
+            print("\nДетали ошибки:")
+            print("- Проверьте правильность введённого пароля")
+            print("- Убедитесь, что файл был зашифрован с этим паролем")
+            print("- Если пароль содержит специальные символы, попробуйте ввести его вручную")
+
+        return False
+
+    except CorruptedDataError as e:
+        print(f"\n[ОШИБКА] {str(e)}")
+        if verbose:
+            print("\nВозможные причины:")
+            print("- Файл был изменён после шифрования")
+            print("- Повреждение при передаче/сохранении")
+            print("- Неполная загрузка файла")
+        return False
+
     except Exception as e:
-        print(f"[ERROR] Ошибка: {str(e)}")
+        print(f"\n[КРИТИЧЕСКАЯ ОШИБКА] {str(e)}")
+        if verbose:
+            import traceback
+            print("\nТрассировка:")
+            traceback.print_exc()
         return False
 
 
@@ -169,12 +210,23 @@ def main():
         help="Скрыть оригинальное имя файла"
     )
 
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help="Подробный вывод (включает отладочные сообщения)"
+    )
     args = parser.parse_args()
+
+    # Настройка логгера
+    logger.set_verbose(args.verbose)
+
+    if args.verbose:
+        logger.log("Включен подробный режим вывода")
 
     if args.mode == "encrypt":
         encrypt_file(args.file, args.password, args.output, args.hide_name)
-    elif args.mode == "decrypt":
-        decrypt_file(args.file, args.password)
+    if args.mode == "decrypt":
+        decrypt_file(args.file, args.password, args.verbose)
 
 
 if __name__ == "__main__":
